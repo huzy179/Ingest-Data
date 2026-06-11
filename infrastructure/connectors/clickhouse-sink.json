@@ -1,0 +1,27 @@
+{
+  "name": "clickhouse-sink",
+  "config": {
+    "connector.class": "com.clickhouse.kafka.connect.ClickHouseSinkConnector",
+    "tasks.max": "1",
+    "topics": "postgres.public.customers,postgres.public.cards,postgres.public.transactions,mongo.banking_events.customers,mongo.banking_events.login_events,mongo.banking_events.fraud_events,mongo.banking_events.audit_logs,mongo.banking_events.notification_logs,mongo.banking_events.device_events",
+    "hostname": "clickhouse",
+    "port": "8123",
+    "ssl": "false",
+    "username": "default",
+    "password": "admin",
+    "database": "raw",
+    "schemas.enable": "false",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    
+    "transforms": "routePostgres,routeMongo",
+    "transforms.routePostgres.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.routePostgres.regex": "postgres\\.public\\.(.*)",
+    "transforms.routePostgres.replacement": "postgres_$1",
+    "transforms.routeMongo.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.routeMongo.regex": "mongo\\.banking_events\\.(.*)",
+    "transforms.routeMongo.replacement": "mongo_$1"
+  }
+}

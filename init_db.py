@@ -85,7 +85,7 @@ class Transaction(Base):
 
 
 # --- MONGODB CONFIGURATION ---
-MONGO_URI = "mongodb://admin:admin@localhost:27017/"
+MONGO_URI = "mongodb://admin:admin@localhost:27017/?directConnection=true"
 MONGO_DB_NAME = "banking_events"
 MONGO_COLLECTIONS = [
     "customers",
@@ -120,12 +120,6 @@ def init_mongodb():
         
         for col_name in MONGO_COLLECTIONS:
             db.create_collection(col_name)
-            init_doc = {
-                "system_status": "initialized",
-                "message": f"Collection '{col_name}' initialized",
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-            db[col_name].insert_one(init_doc)
             logger.info(f"MongoDB collection '{col_name}' initialized.")
             
         client.close()

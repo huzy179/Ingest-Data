@@ -1,0 +1,20 @@
+{
+  "name": "mongodb-source",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "tasks.max": "1",
+    "mongodb.connection.string": "mongodb://admin:admin@mongo:27017/?authSource=admin",
+    "topic.prefix": "mongo",
+    "database.include.list": "banking_events",
+    "collection.include.list": "banking_events.customers,banking_events.login_events,banking_events.fraud_events,banking_events.audit_logs,banking_events.notification_logs,banking_events.device_events",
+    
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+    "transforms.unwrap.drop.tombstones": "true"
+  }
+}
