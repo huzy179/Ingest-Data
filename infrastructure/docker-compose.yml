@@ -85,6 +85,7 @@ services:
       - kafka
       - postgres
       - mongo
+      - minio
     environment:
       CONNECT_BOOTSTRAP_SERVERS: 'kafka:29092'
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
@@ -117,7 +118,37 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
 
+  minio:
+    image: minio/minio:latest
+    container_name: banking-minio
+    ports:
+      - "9005:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio_admin
+      MINIO_ROOT_PASSWORD: minio_password
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: banking-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set myminio http://minio:9000 minio_admin minio_password; do
+        echo 'Waiting for MinIO...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing myminio/banking-lakehouse;
+      echo 'Bucket banking-lakehouse created successfully!';
+      exit 0;
+      "
+
 volumes:
   postgres_data:
   mongo_data:
   clickhouse_data:
+  minio_data:
