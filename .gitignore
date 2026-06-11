@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+Active/
+Active.bat
+Scripts/
+Include/
+Lib/
+share/
+
+# Data Files (CRITICAL: Ignore 2.35 GB CSV and other raw files to prevent Git push errors)
+data/*.csv
+data/*.zip
+data/*.tar.gz
+
+# IDE / Editor Settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+logs/
