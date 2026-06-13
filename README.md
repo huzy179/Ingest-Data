@@ -1,105 +1,181 @@
-# Banking CDC Ingestion Pipeline: PostgreSQL & MongoDB -> ClickHouse
+# Real-time CDC Data Lakehouse Pipeline: PostgreSQL & MongoDB -> MinIO -> Spark -> ClickHouse
 
-Dự án này xây dựng một hệ thống Ingestion Pipeline truyền tải dữ liệu thời gian thực (CDC - Change Data Capture) từ hai nguồn cơ sở dữ liệu (PostgreSQL và MongoDB) về ClickHouse Data Warehouse, sử dụng các công cụ Apache Kafka, Debezium, dbt và Airflow.
-
-Hiện tại, dự án đã hoàn thành **Bước 2: Xây dựng cấu trúc dữ liệu nguồn, làm sạch dữ liệu và nạp dữ liệu mẫu chất lượng cao**.
+Dự án này xây dựng một hệ thống ống dẫn dữ liệu thời gian thực (CDC - Change Data Capture) quy mô lớn theo kiến trúc **Data Lakehouse** hiện đại. Dữ liệu thay đổi từ PostgreSQL và MongoDB được thu thập tự động qua Debezium, lưu trữ thô tại tầng Bronze (MinIO), sau đó được xử lý, làm sạch qua Spark (Silver & Gold Layers) và lưu trữ vật lý tối ưu trong ClickHouse phục vụ phân tích.
 
 ---
 
-## 📁 Cấu trúc Thư mục
+## 🏗️ Kiến trúc Hệ thống (Data Pipeline Architecture)
 
 ```text
-├── data/                       # Thư mục chứa các tệp CSV gốc (Không đẩy lên Git)
+                               ┌───────────────────┐
+                               │  Live Simulator   │
+                               └─────────┬─────────┘
+                                         │ (Ghi Real-time)
+                                         ▼
+   ┌───────────────────────┐           ┌───────────────────────┐
+   │ PostgreSQL (Relational)│           │    MongoDB (NoSQL)    │
+   └───────────┬───────────┘           └───────────┬───────────┘
+               │ (Logical Replication)             │ (Replica Set Oplog)
+               ▼                                   ▼
+      ┌─────────────────┐                 ┌─────────────────┐
+      │ Debezium Source │                 │ Debezium Source │
+      └────────┬────────┘                 └────────┬────────┘
+               │                                   │
+               ▼                                   ▼
+      ┌─────────────────────────────────────────────────────┐
+      │                Apache Kafka (KRaft)                 │
+      └──────────────────────────┬──────────────────────────┘
+                                 │
+                                 ▼ (S3 Sink Connector)
+      ┌─────────────────────────────────────────────────────┐
+      │     MinIO S3 Object Storage (Bronze - Raw JSON)     │
+      └──────────────────────────┬──────────────────────────┘
+                                 │
+       ┌─────────────────────────┼─────────────────────────┐
+       │ (Đọc dữ liệu thô)       │ (Query trực tiếp)       │
+       ▼                         ▼                         │
+┌──────────────┐         ┌──────────────┐                  │
+│ PySpark Job  │         │  ClickHouse  │                  │
+│ (Silver/Gold)│         │   Raw DB     │                  │
+└──────┬───────┘         │ (S3 Engine)  │                  │
+       │                 └──────────────┘                  │
+       │ (Ghi qua JDBC)                                    │
+       ▼                                                   ▼
+┌──────────────────────────────────────────────────────────┐
+│             ClickHouse Analytics Database                │
+│   - Tầng Silver (Dữ liệu sạch & chuẩn hóa MergeTree)      │
+│   - Tầng Gold (Dữ liệu tổng hợp, tối ưu chỉ mục)         │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📁 Cấu trúc Thư mục Dự án
+
+```text
+├── data/                           # Thư mục chứa các tệp CSV gốc (Không đẩy lên Git)
 │   ├── users.csv
 │   ├── cards.csv
 │   └── transactions.csv
-├── infrastructure/             # Cấu hình docker-compose của hạ tầng
-│   └── docker-compose.yml      # Chạy PostgreSQL (cổng 5434) và MongoDB (cổng 27017)
-├── scripts/                    # Scripts nạp dữ liệu sạch
-│   ├── import_users.py         # Nạp khách hàng & tạo profile chính trong Mongo + sự kiện ban đầu
-│   ├── import_cards.py         # Nạp thẻ ngân hàng, map vào Postgres + lồng vào Mongo
-│   └── import_transactions.py  # Nạp 150 giao dịch mới nhất/user + đồng bộ 5 event collections
-├── init_db.py                  # Khởi tạo schema trống cho PostgreSQL & MongoDB
-├── requirements.txt            # Thư viện Python cần thiết
-├── .gitignore                  # Cấu hình bỏ qua các file thừa và file CSV dung lượng lớn
-└── README.md                   # Hướng dẫn dự án này
+├── dags/                           # Airflow DAGs điều phối hệ thống
+│   ├── generate_data_dag.py        # DAG giả lập sinh dữ liệu live (chạy mỗi 5 phút)
+│   └── spark_orchestration_dag.py  # DAG submit các PySpark Jobs (chạy mỗi 30 phút)
+├── spark_apps/                     # Scripts xử lý dữ liệu PySpark
+│   ├── transform_silver.py         # Đọc Bronze (MinIO) -> Làm sạch & Ép kiểu -> Silver ClickHouse
+│   └── transform_gold.py           # Đọc Silver -> Phép Join nghiệp vụ -> Gold ClickHouse
+├── scripts/                        # Các helper scripts phục vụ vận hành
+│   ├── init_clickhouse.py          # Khởi tạo DB raw/analytics & tối ưu chỉ mục ClickHouse
+│   ├── generate_live_data.py       # Script chạy tay giả lập giao dịch từ host
+│   ├── register_connectors.py      # Tự động đăng ký Debezium và S3 Sink với Kafka Connect
+│   ├── import_users.py             # Nạp khách hàng ban đầu từ CSV vào database
+│   ├── import_cards.py             # Nạp thẻ ngân hàng ban đầu
+│   └── import_transactions.py      # Nạp giao dịch lịch sử ban đầu
+├── infrastructure/                 # Hạ tầng Docker stack
+│   ├── docker-compose.yml          # Định nghĩa toàn bộ 9 dịch vụ trong stack
+│   ├── connect/                    # Dockerfile cho Kafka Connect (tải plugins)
+│   └── connectors/                 # Cấu hình JSON đăng ký Kafka Connectors
+├── init_db.py                      # Khởi tạo Postgres tables và Mongo collections trống
+├── requirements.txt                # Thư viện Python chạy tại máy Host
+└── README.md                       # Tài liệu hướng dẫn sử dụng
 ```
 
 ---
 
-## 🛠️ Hạ tầng Kỹ thuật & Thiết kế Dữ liệu
+## 🛠️ Chi tiết các Dịch vụ Hạ tầng (Docker Services)
 
-### 1. PostgreSQL (Cổng 5434)
-Đóng vai trò là Cơ sở dữ liệu quan hệ lõi của ứng dụng ngân hàng (`banking_core`), lưu trữ dữ liệu dạng bảng quan hệ:
-* `customers`: Thông tin cá nhân khách hàng.
-* `cards`: Thông tin thẻ của khách hàng (Khóa ngoại kết nối với `customers.id`).
-* `transactions`: Giao dịch thanh toán của thẻ (Khóa ngoại kết nối với `cards.id`).
-
-### 2. MongoDB (Cổng 27017)
-Đóng vai trò là kho lưu trữ NoSQL (`banking_events`) để quản lý Profile khách hàng lồng nhau và các dòng sự kiện phi cấu trúc:
-* `customers`: Hồ sơ khách hàng lồng nhau (gồm thông tin cá nhân, danh sách các thẻ của họ, và mảng 10 giao dịch gần đây nhất được sắp xếp theo đúng thứ tự thời gian).
-* `login_events`: Nhật ký đăng nhập thành công/thất bại của người dùng.
-* `fraud_events`: Danh sách các giao dịch bị đánh dấu gian lận (`is_fraud == 'Yes'`) kèm theo lý do và điểm rủi ro.
-* `audit_logs`: Nhật ký kiểm toán các thao tác dữ liệu (`customer_created`, `card_created`).
-* `notification_logs`: Nhật ký thông báo gửi đi cho người dùng (SMS cảnh báo gian lận, Email cảnh báo thẻ bị lộ trên Dark Web).
-* `device_events`: Nhật ký tương tác thiết bị ứng dụng của người dùng.
+Hệ thống chạy trên Docker với 9 dịch vụ liên kết chặt chẽ:
+1. **`postgres` (cổng 5434):** Cơ sở dữ liệu nghiệp vụ chính (`banking_core`), bật logical replication.
+2. **`mongo` (cổng 27017):** Kho lưu trữ phi cấu trúc (`banking_events`), bật Replica Set (`rs0`) để phục vụ CDC.
+3. **`kafka` (cổng 9092):** Message queue trung chuyển dữ liệu dạng sự kiện (Event Streaming).
+4. **`connect` (cổng 8083):** Kafka Connect tích hợp Debezium Postgres/Mongo Source và S3 Sink.
+5. **`minio` (cổng 9005 API / 9001 Web UI):** Hồ lưu trữ đối tượng chứa dữ liệu Bronze thô.
+6. **`clickhouse` (cổng 8123 HTTP / 9000 TCP):** Data Warehouse phục vụ truy vấn phân tích tốc độ cao.
+7. **`spark` (Local Mode):** Động cơ tính toán phân tán chạy các biến đổi PySpark.
+8. **`airflow-webserver` & `airflow-scheduler` (cổng 8080):** Bộ điều phối và giám sát toàn bộ pipeline.
 
 ---
 
-## 🚀 Hướng dẫn Bắt đầu Nhanh
+## ⚡ Thiết kế Chỉ mục Vật lý ClickHouse (Lớp Silver & Gold)
 
-### 1. Khởi chạy Hạ tầng Docker
-Khởi động cơ sở dữ liệu PostgreSQL và MongoDB chạy ngầm:
-```bash
-docker compose -f infrastructure/docker-compose.yml up -d
-```
+Tất cả các bảng trong database `analytics` đều được cấu hình tối ưu hóa bằng **MergeTree Engine** kèm theo các khóa chỉ mục sắp xếp (`ORDER BY`) và tính năng nullable key để đạt tốc độ truy vấn phân tích tối đa:
 
-### 2. Thiết lập Môi trường Python
-Tạo môi trường ảo và cài đặt các thư viện cần thiết:
+* **`silver_postgres_customers`:** `ORDER BY id`
+* **`silver_postgres_cards`:** `ORDER BY (customer_id, card_index)`
+* **`silver_postgres_transactions`:** `ORDER BY (card_id, transaction_date)`
+* **`silver_mongo_login_events` / `silver_mongo_device_events`:** `ORDER BY (user_id, timestamp)`
+* **`silver_mongo_fraud_events`:** `ORDER BY (customer_id, transaction_date)`
+* **`silver_mongo_notification_logs`:** `ORDER BY (customer_id, timestamp)`
+* **`gold_fraud_analysis`:** `ORDER BY (customer_id, transaction_date)`
+* **`gold_user_behavior_summary`:** `ORDER BY customer_id`
+* **Table Settings:** Bật `SETTINGS allow_nullable_key = 1` giúp ClickHouse chấp nhận các cột `Nullable` làm khóa sắp xếp sơ cấp.
+
+---
+
+## 🚀 Hướng dẫn Vận hành Hệ thống từ A - Z
+
+### 1. Chuẩn bị Môi trường
+Tạo môi trường ảo Python trên máy host và cài đặt các thư viện cần thiết:
 ```bash
-# Tạo môi trường ảo
 python -m venv .venv
-
-# Kích hoạt môi trường ảo (Windows)
-.venv\Scripts\activate
-
-# Kích hoạt môi trường ảo (macOS/Linux)
-source .venv/bin/activate
-
-# Cài đặt thư viện
+.venv\Scripts\activate      # Trên Windows
+source .venv/bin/activate   # Trên macOS/Linux
 pip install -r requirements.txt
 ```
 
-### 3. Chuẩn bị tệp dữ liệu CSV gốc
-Đặt các tệp dữ liệu CSV của bạn vào thư mục `data/` trong thư mục gốc của dự án:
-* `data/users.csv`
-* `data/cards.csv`
-* `data/transactions.csv` (Tệp này có dung lượng ~2.19 GB và đã được tự động thêm vào `.gitignore` để tránh đẩy lên GitHub).
-
-### 4. Khởi tạo Cơ sở dữ liệu
-Chạy script để tạo các bảng trống trong PostgreSQL và các bộ sưu tập (collections) trống trong MongoDB:
+### 2. Khởi chạy Hạ tầng Docker Stack
 ```bash
-python init_db.py
+docker compose -f infrastructure/docker-compose.yml up -d
 ```
+*Đợi khoảng 30-45 giây để Kafka Connect, MongoDB, PostgreSQL, MinIO và Airflow khởi động hoàn chỉnh.*
 
-### 5. Nạp dữ liệu nguồn mẫu sạch
-Chạy tuần tự 3 script sau để nạp dữ liệu sạch vào hệ thống:
+### 3. Tạo Schema & Nạp dữ liệu Lịch sử ban đầu
+Đặt các tệp `users.csv`, `cards.csv`, `transactions.csv` vào thư mục `data/` và khởi chạy quy trình nạp:
 ```bash
-# 1. Nạp khách hàng và khởi tạo tài liệu MongoDB ban đầu
+# Khởi tạo bảng và collection trống
+python init_db.py
+
+# Nạp dữ liệu ban đầu
 python scripts/import_users.py
-
-# 2. Nạp thẻ ngân hàng và đồng bộ hóa thời gian tạo tài khoản khách hàng
 python scripts/import_cards.py
-
-# 3. Nạp giao dịch (Sắp xếp thời gian & trích chọn 150 giao dịch mới nhất/User)
 python scripts/import_transactions.py
 ```
 
+### 4. Đăng ký CDC & S3 Sink Connectors
+Đăng ký các Kafka Connectors để bắt đầu truyền dữ liệu tự động xuống MinIO:
+```bash
+python scripts/register_connectors.py
+```
+*Bạn có thể truy cập http://localhost:9001 (minio_admin/minio_password) để kiểm tra các file JSON thô bắt đầu xuất hiện trong bucket `banking-lakehouse`.*
+
+### 5. Khởi tạo Bảng ClickHouse
+Tạo các database `raw`, `analytics` và toàn bộ 21 bảng cấu hình tối ưu chỉ mục:
+```bash
+python scripts/init_clickhouse.py
+```
+
+### 6. Quản lý trên Airflow Webserver
+Truy cập **[http://localhost:8080](http://localhost:8080)** (Tài khoản: `admin` / Mật khẩu: `admin`):
+* Bật (Unpause) DAG **`live_data_generator_dag`** để bắt đầu sinh giao dịch live ngẫu nhiên vào hệ thống mỗi 5 phút.
+* Bật (Unpause) DAG **`lakehouse_spark_orchestration`** để bắt đầu chạy các tác vụ PySpark biến đổi dữ liệu thô (Bronze -> Silver -> Gold) ghi vào ClickHouse định kỳ.
+
 ---
 
-## 🧹 Các Quy tắc làm sạch Dữ liệu đã Áp dụng
-* **Mã CVV và Zipcode:** Đệm đầy đủ số 0 ở đầu (CVV đủ 3 chữ số, Zipcode đủ 5 chữ số), ngăn Pandas tự ép kiểu số làm mất dữ liệu.
-* **Số phòng căn hộ (Apartment):** Xử lý triệt để các đuôi thập phân dạng `.0` do Pandas tự ép kiểu float khi gặp giá trị trống (`NaN`).
-* **Số điện thoại:** Sinh dữ liệu số điện thoại ngẫu nhiên theo đúng định dạng di động Mỹ (`XXX-XXX-XXXX`), đồng bộ hoàn toàn với dữ liệu địa lý của người dùng.
-* **Đồng bộ thời gian:** Đồng bộ hóa trường ngày tạo tài khoản của khách hàng (`created_at`) khớp với thời điểm mở thẻ đầu tiên của họ.
-* **Đồng bộ sự kiện giao dịch:** Các sự kiện thiết bị (`device_events`) và đăng nhập (`login_events`) được sinh ra tự động trước thời điểm thực hiện giao dịch vài phút để tăng tính thực tế cho dòng dữ liệu phân tích.
+## 📊 Phân tích Dữ liệu Gold Layer trên ClickHouse
+
+Để truy cập giao diện viết SQL trực quan của ClickHouse, vào trình duyệt: **[http://localhost:8123/play](http://localhost:8123/play)** (User: `default` / Password: `admin`).
+
+Một số câu hỏi phân tích ví dụ:
+* **Xem thông tin chi tiết các giao dịch gian lận kèm trạng thái gửi SMS/Email cảnh báo:**
+  ```sql
+  SELECT customer_name, card_brand, amount, merchant_name, risk_score, alert_type, alert_status 
+  FROM analytics.gold_fraud_analysis 
+  WHERE is_fraud = 'Yes' 
+  LIMIT 10;
+  ```
+* **Tổng hợp hành vi người dùng (Top 5 khách hàng chi tiêu nhiều nhất):**
+  ```sql
+  SELECT customer_name, total_transactions, total_amount_spent, average_transaction_amount
+  FROM analytics.gold_user_behavior_summary
+  ORDER BY total_amount_spent DESC
+  LIMIT 5;
+  ```
