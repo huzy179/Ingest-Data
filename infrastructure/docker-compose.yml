@@ -147,8 +147,77 @@ services:
       exit 0;
       "
 
+  spark:
+    image: apache/spark:3.5.1
+    container_name: banking-spark
+    user: root
+    environment:
+      - SPARK_MODE=local
+      - SPARK_DRIVER_MEMORY=512m
+      - SPARK_EXECUTOR_MEMORY=512m
+    volumes:
+      - ../spark_apps:/opt/spark/spark_apps
+    depends_on:
+      - minio
+      - clickhouse
+    command: tail -f /dev/null
+
+  airflow-init:
+    image: apache/airflow:2.9.2
+    container_name: banking-airflow-init
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - airflow_data:/opt/airflow
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com
+      "
+
+  airflow-webserver:
+    image: apache/airflow:2.9.2
+    container_name: banking-airflow-webserver
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+    volumes:
+      - ../dags:/opt/airflow/dags
+      - /var/run/docker.sock:/var/run/docker.sock
+      - airflow_data:/opt/airflow
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: webserver
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.2
+    container_name: banking-airflow-scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
+    volumes:
+      - ../dags:/opt/airflow/dags
+      - /var/run/docker.sock:/var/run/docker.sock
+      - airflow_data:/opt/airflow
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: scheduler
+
 volumes:
   postgres_data:
   mongo_data:
   clickhouse_data:
   minio_data:
+  airflow_data:
