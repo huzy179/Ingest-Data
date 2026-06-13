@@ -27,12 +27,9 @@ MANIFEST
 venv/
 ENV/
 env/
-Active/
-Active.bat
-Scripts/
-Include/
-Lib/
-share/
+.venv/Scripts/
+.venv/Include/
+.venv/Lib/
 
 # Data Files (CRITICAL: Ignore 2.35 GB CSV and other raw files to prevent Git push errors)
 data/*.csv
