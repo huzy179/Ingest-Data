@@ -166,13 +166,28 @@ services:
     image: apache/airflow:2.9.2
     container_name: banking-airflow-init
     environment:
-      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:admin@postgres:5432/airflow
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
     volumes:
       - airflow_data:/opt/airflow
     command: >
       bash -c "
+      python -c \"
+      import psycopg2
+      try:
+          conn = psycopg2.connect('postgresql://admin:admin@postgres:5432/postgres')
+          conn.autocommit = True
+          cursor = conn.cursor()
+          cursor.execute('SELECT 1 FROM pg_database WHERE datname = \\'airflow\\'')
+          if not cursor.fetchone():
+              cursor.execute('CREATE DATABASE airflow')
+          cursor.close()
+          conn.close()
+      except Exception as e:
+          print('Database creation error:', e)
+      \" &&
       airflow db init &&
       airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com
       "
@@ -181,8 +196,8 @@ services:
     image: apache/airflow:2.9.2
     container_name: banking-airflow-webserver
     environment:
-      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:admin@postgres:5432/airflow
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
       - _AIRFLOW_WWW_USER_USERNAME=admin
@@ -202,8 +217,8 @@ services:
     image: apache/airflow:2.9.2
     container_name: banking-airflow-scheduler
     environment:
-      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:admin@postgres:5432/airflow
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
     volumes:

@@ -12,7 +12,7 @@ default_args = {
     'retry_delay': timedelta(minutes=1),
 }
 
-def run_spark_job(script_name):
+def run_spark_job(script_name, execution_date=None):
     import docker
     client = docker.from_env()
     command = [
@@ -20,8 +20,10 @@ def run_spark_job(script_name):
         "--packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.clickhouse:clickhouse-jdbc:0.6.0,com.amazonaws:aws-java-sdk-bundle:1.12.262",
         f"/opt/spark/spark_apps/{script_name}"
     ]
+    if execution_date:
+        command.extend(["--execution-date", execution_date])
     
-    print(f"Starting Spark job: {script_name}")
+    print(f"Starting Spark job: {script_name} with args {command[3:]}")
     exec_id = client.api.exec_create(container='banking-spark', cmd=command)['Id']
     output_stream = client.api.exec_start(exec_id, stream=True)
     
@@ -45,7 +47,10 @@ with DAG(
     run_silver = PythonOperator(
         task_id='run_silver_transformation',
         python_callable=run_spark_job,
-        op_kwargs={'script_name': 'transform_silver.py'},
+        op_kwargs={
+            'script_name': 'transform_silver.py',
+            'execution_date': '{{ ds }}'
+        },
     )
 
     run_gold = PythonOperator(
