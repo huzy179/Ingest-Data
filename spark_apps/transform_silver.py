@@ -4,7 +4,7 @@ from pyspark.sql.functions import col, row_number, to_timestamp, when
 from pyspark.sql.window import Window
 
 def create_spark_session():
-    # Khởi tạo Spark Session với cấu hình AWS S3A và ClickHouse JDBC Driver
+    # Khởi tạo Spark Session có tích hợp Delta Lake Extension và Catalog
     spark = SparkSession.builder \
         .appName("Data-Lakehouse-Silver-Transformation") \
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
@@ -12,24 +12,37 @@ def create_spark_session():
         .config("spark.hadoop.fs.s3a.secret.key", "minio_password") \
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
         .getOrCreate()
     return spark
 
 def get_input_path(topic, execution_date):
     if not execution_date:
-        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.json"
+        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.parquet"
     try:
         from datetime import datetime
         dt = datetime.strptime(execution_date, "%Y-%m-%d")
         year = dt.strftime("%Y")
         month = dt.strftime("%m")
         day = dt.strftime("%d")
-        return f"s3a://banking-lakehouse/topics/{topic}/year={year}/month={month}/day={day}/*.json"
+        return f"s3a://banking-lakehouse/topics/{topic}/year={year}/month={month}/day={day}/*.parquet"
     except Exception as e:
         print(f"Error parsing date {execution_date}: {e}. Falling back to wildcard path.")
-        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.json"
+        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.parquet"
 
-def write_to_clickhouse(df, table_name):
+def write_to_clickhouse_and_delta(df, table_name):
+    # Ghi dữ liệu vào Delta Lake trên MinIO (Silver Layer Delta)
+    delta_path = f"s3a://banking-lakehouse/silver/delta/{table_name}"
+    try:
+        df.write \
+            .format("delta") \
+            .mode("append") \
+            .save(delta_path)
+        print(f"Successfully wrote data to Delta Lake: {delta_path}")
+    except Exception as e:
+        print(f"Error writing to Delta Lake for {table_name}: {e}")
+
     # Điền chuỗi rỗng cho các cột string bị null để tránh lỗi nullability của ClickHouse
     df_filled = df.na.fill("")
     
@@ -57,7 +70,7 @@ def transform_postgres_customers(spark, execution_date=None):
     print("Transforming Postgres Customers...")
     path = get_input_path("postgres.public.customers", execution_date)
     try:
-        df = spark.read.json(path)
+        df = spark.read.parquet(path)
     except Exception as e:
         if "PATH_NOT_FOUND" in str(e) or "Path does not exist" in str(e):
             print(f"No raw data found on S3 for postgres.public.customers yet. Skipping.")
@@ -86,13 +99,13 @@ def transform_postgres_customers(spark, execution_date=None):
         .withColumn("total_debt", col("total_debt").cast("double")) \
         .withColumn("created_at", (col("created_at").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse(df_cleaned, "silver_postgres_customers")
+    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_customers")
 
 def transform_postgres_cards(spark, execution_date=None):
     print("Transforming Postgres Cards...")
     path = get_input_path("postgres.public.cards", execution_date)
     try:
-        df = spark.read.json(path)
+        df = spark.read.parquet(path)
     except Exception as e:
         if "PATH_NOT_FOUND" in str(e) or "Path does not exist" in str(e):
             print(f"No raw data found on S3 for postgres.public.cards yet. Skipping.")
@@ -114,13 +127,13 @@ def transform_postgres_cards(spark, execution_date=None):
         .withColumn("year_pin_last_changed", col("year_pin_last_changed").cast("integer")) \
         .withColumn("created_at", (col("created_at").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse(df_cleaned, "silver_postgres_cards")
+    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_cards")
 
 def transform_postgres_transactions(spark, execution_date=None):
     print("Transforming Postgres Transactions...")
     path = get_input_path("postgres.public.transactions", execution_date)
     try:
-        df = spark.read.json(path)
+        df = spark.read.parquet(path)
     except Exception as e:
         if "PATH_NOT_FOUND" in str(e) or "Path does not exist" in str(e):
             print(f"No raw data found on S3 for postgres.public.transactions yet. Skipping.")
@@ -143,7 +156,7 @@ def transform_postgres_transactions(spark, execution_date=None):
         .withColumn("day", col("day").cast("integer")) \
         .withColumn("transaction_date", (col("transaction_date").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse(df_cleaned, "silver_postgres_transactions")
+    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_transactions")
 
 MONGO_SCHEMAS = {
     "login_events": [
@@ -203,7 +216,7 @@ def transform_mongo_events(spark, topic_name, table_name, execution_date=None):
     print(f"Transforming Mongo Events for {topic_name}...")
     path = get_input_path(f"mongo.banking_events.{topic_name}", execution_date)
     try:
-        df = spark.read.json(path)
+        df = spark.read.parquet(path)
     except Exception as e:
         if "PATH_NOT_FOUND" in str(e) or "Path does not exist" in str(e):
             print(f"No raw data found on S3 for {topic_name} yet. Skipping.")
@@ -224,7 +237,7 @@ def transform_mongo_events(spark, topic_name, table_name, execution_date=None):
     # Lựa chọn đúng thứ tự các cột như ClickHouse yêu cầu
     df_cleaned = df.select([col_name for col_name, _ in schema_cols])
     
-    write_to_clickhouse(df_cleaned, table_name)
+    write_to_clickhouse_and_delta(df_cleaned, table_name)
 
 def main():
     import argparse

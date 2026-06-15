@@ -9,22 +9,19 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'retry_delay': timedelta(minutes=1),
+    'retry_delay': timedelta(minutes=2),
 }
 
-def run_spark_job(script_name, execution_date=None):
+def run_spark_job(script_name, packages_str):
     import docker
     client = docker.from_env()
     command = [
         "/opt/spark/bin/spark-submit",
-        "--packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.clickhouse:clickhouse-jdbc:0.6.0,com.amazonaws:aws-java-sdk-bundle:1.12.262,io.delta:delta-spark_2.12:3.1.0",
-
+        "--packages", packages_str,
         f"/opt/spark/spark_apps/{script_name}"
     ]
-    if execution_date:
-        command.extend(["--execution-date", execution_date])
     
-    print(f"Starting Spark job: {script_name} with args {command[3:]}")
+    print(f"Starting Batch Ingestion Job: {script_name} with command: {command}")
     exec_id = client.api.exec_create(container='banking-spark', cmd=command)['Id']
     output_stream = client.api.exec_start(exec_id, stream=True)
     
@@ -38,26 +35,29 @@ def run_spark_job(script_name, execution_date=None):
         raise Exception(f"Spark job {script_name} failed with exit code {exit_code}")
 
 with DAG(
-    'lakehouse_spark_orchestration',
+    'lakehouse_batch_ingestion',
     default_args=default_args,
-    description='Orchestrate PySpark Silver & Gold transformations',
-    schedule_interval=timedelta(minutes=30),  # Run every 30 minutes
+    description='Orchestrate Batch Ingestion from Postgres & MongoDB to MinIO',
+    schedule_interval=timedelta(days=1),  # Run daily
     catchup=False,
 ) as dag:
 
-    run_silver = PythonOperator(
-        task_id='run_silver_transformation',
+    ingest_postgres = PythonOperator(
+        task_id='ingest_postgres_batch',
         python_callable=run_spark_job,
         op_kwargs={
-            'script_name': 'transform_silver.py',
-            'execution_date': '{{ ds }}'
+            'script_name': 'batch_ingest_postgres.py',
+            'packages_str': 'org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.6.0'
         },
     )
 
-    run_gold = PythonOperator(
-        task_id='run_gold_transformation',
+    ingest_mongodb = PythonOperator(
+        task_id='ingest_mongodb_batch',
         python_callable=run_spark_job,
-        op_kwargs={'script_name': 'transform_gold.py'},
+        op_kwargs={
+            'script_name': 'batch_ingest_mongodb.py',
+            'packages_str': 'org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0'
+        },
     )
 
-    run_silver >> run_gold
+    ingest_postgres >> ingest_mongodb

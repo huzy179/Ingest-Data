@@ -74,6 +74,19 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_OPTS: "-Xms128m -Xmx256m"
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: banking-schema-registry
+    ports:
+      - "8081:8081"
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+      SCHEMA_REGISTRY_OPTS: "-Xms128M -Xmx256M"
+
   connect:
     build:
       context: ./connect
@@ -86,6 +99,7 @@ services:
       - postgres
       - mongo
       - minio
+      - schema-registry
     environment:
       CONNECT_BOOTSTRAP_SERVERS: 'kafka:29092'
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
@@ -105,6 +119,7 @@ services:
       CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
       KAFKA_OPTS: "-Xms256M -Xmx512M"
+
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
@@ -161,6 +176,23 @@ services:
       - minio
       - clickhouse
     command: tail -f /dev/null
+
+  spark-streaming:
+    image: apache/spark:3.5.1
+    container_name: banking-spark-streaming
+    user: root
+    environment:
+      - SPARK_MODE=local
+      - SPARK_DRIVER_MEMORY=512m
+      - SPARK_EXECUTOR_MEMORY=512m
+    volumes:
+      - ../spark_apps:/opt/spark/spark_apps
+    depends_on:
+      - minio
+      - clickhouse
+    command: /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.clickhouse:clickhouse-jdbc:0.6.0,com.amazonaws:aws-java-sdk-bundle:1.12.262,io.delta:delta-spark_2.12:3.1.0 /opt/spark/spark_apps/stream_transform_silver.py
+
+
 
   airflow-init:
     image: apache/airflow:2.9.2

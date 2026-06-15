@@ -12,7 +12,7 @@
     "timezone": "UTC",
     "store.url": "http://minio:9000",
     "storage.class": "io.confluent.connect.s3.storage.S3Storage",
-    "format.class": "io.confluent.connect.s3.format.json.JsonFormat",
+    "format.class": "io.confluent.connect.s3.format.parquet.ParquetFormat",
     "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
     "path.format": "'year'=YYYY/'month'=MM/'day'=dd",
     "partition.duration.ms": "86400000",
@@ -22,9 +22,10 @@
     "schema.compatibility": "NONE",
     "aws.access.key.id": "minio_admin",
     "aws.secret.access.key": "minio_password",
-    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "key.converter.schemas.enable": "false",
-    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": "false"
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081"
+
   }
 }

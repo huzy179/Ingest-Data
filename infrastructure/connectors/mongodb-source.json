@@ -8,10 +8,11 @@
     "database.include.list": "banking_events",
     "collection.include.list": "banking_events.customers,banking_events.login_events,banking_events.fraud_events,banking_events.audit_logs,banking_events.notification_logs,banking_events.device_events",
     
-    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "key.converter.schemas.enable": "false",
-    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": "false",
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+
     
     "transforms": "unwrap",
     "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
