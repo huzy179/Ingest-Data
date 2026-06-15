@@ -1,5 +1,6 @@
 import os
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import current_date
 
 def create_spark_session():
     # Khởi tạo Spark Session với cấu hình S3A
@@ -17,7 +18,6 @@ def ingest_collection(spark, collection_name):
     print(f"Start batch ingesting collection {collection_name} from MongoDB to MinIO...")
     
     # Kết nối MongoDB bằng Spark MongoDB Connector
-    # Sử dụng connection.uri cho bản 10.x trở lên
     mongo_uri = "mongodb://admin:admin@mongo:27017/?authSource=admin"
     
     df = spark.read \
@@ -27,13 +27,17 @@ def ingest_collection(spark, collection_name):
         .option("collection", collection_name) \
         .load()
         
+    # Thêm cột load_date để làm phân vùng bất biến (Immutable Partitioning)
+    df_partitioned = df.withColumn("load_date", current_date().cast("string"))
+        
     # Đường dẫn ghi trên MinIO
     output_path = f"s3a://banking-lakehouse/batch/mongodb/{collection_name}"
     
-    # Ghi dữ liệu dạng JSON vào Bronze layer
-    df.write \
+    # Ghi dữ liệu dạng JSON vào Bronze layer phân vùng theo load_date
+    df_partitioned.write \
         .format("json") \
-        .mode("overwrite") \
+        .partitionBy("load_date") \
+        .mode("append") \
         .save(output_path)
         
     print(f"Successfully ingested {df.count()} rows from {collection_name} to {output_path}")

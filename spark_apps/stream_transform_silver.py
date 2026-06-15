@@ -1,8 +1,9 @@
 import os
+import json
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, row_number, to_timestamp, when, lit, to_json
+from pyspark.sql.functions import col, row_number, to_timestamp, when, lit, to_json, expr
 from pyspark.sql.window import Window
-from pyspark.sql.types import StructType, StructField, StringType, LongType, IntegerType, DoubleType, TimestampType, ArrayType
+from pyspark.sql.types import StructType, StructField, StringType, LongType, IntegerType, DoubleType, TimestampType, ArrayType, BooleanType
 
 def create_spark_session():
     # Khởi tạo Spark Session có tích hợp Delta Lake Extension và Catalog
@@ -19,7 +20,7 @@ def create_spark_session():
         .getOrCreate()
     return spark
 
-def write_to_clickhouse_and_delta(df, batch_id, table_name):
+def write_to_delta(df, batch_id, table_name):
     # Đếm số bản ghi trong batch
     cnt = df.count()
     if cnt == 0:
@@ -27,39 +28,71 @@ def write_to_clickhouse_and_delta(df, batch_id, table_name):
         
     print(f"Streaming batch {batch_id}: processing {cnt} rows for {table_name}")
     
-    # 1. Ghi dữ liệu vào Delta Lake
     delta_path = f"s3a://banking-lakehouse/silver/delta/{table_name}"
+    spark = df.sparkSession
+    
+    from delta.tables import DeltaTable
+    
+    # Xác định khóa chính (PostgreSQL dùng id, MongoDB dùng _id)
+    primary_key = "_id" if "_id" in df.columns else "id"
+    
     try:
-        df.write \
-            .format("delta") \
-            .mode("append") \
-            .save(delta_path)
-        print(f"Successfully wrote batch to Delta Lake: {delta_path}")
-    except Exception as e:
-        print(f"Error writing batch to Delta Lake for {table_name}: {e}")
-
-    # 2. Ghi dữ liệu vào ClickHouse
-    df_filled = df.na.fill("")
-    for field in df_filled.schema.fields:
-        if isinstance(field.dataType, (StructType, ArrayType)):
-            df_filled = df_filled.withColumn(field.name, to_json(col(field.name)))
+        # Nếu bảng đã tồn tại, thực hiện MERGE INTO để tránh trùng lặp dữ liệu
+        if DeltaTable.isDeltaTable(spark, delta_path):
+            delta_table = DeltaTable.forPath(spark, delta_path)
             
-    jdbc_url = "jdbc:clickhouse://clickhouse:8123/analytics"
-    try:
-        df_filled.write \
-            .format("jdbc") \
-            .option("url", jdbc_url) \
-            .option("dbtable", table_name) \
-            .option("user", "default") \
-            .option("password", "admin") \
-            .option("driver", "com.clickhouse.jdbc.ClickHouseDriver") \
-            .mode("append") \
-            .save()
-        print(f"Successfully wrote batch to ClickHouse: analytics.{table_name}")
+            # Upsert (Merge) dữ liệu mới dựa trên Khóa chính
+            delta_table.alias("target").merge(
+                source = df.alias("source"),
+                condition = f"target.{primary_key} = source.{primary_key}"
+            ).whenMatchedUpdateAll() \
+             .whenNotMatchedInsertAll() \
+             .execute()
+            print(f"Successfully merged batch to Delta Lake table: {delta_path}")
+        else:
+            # Ghi đè khởi tạo bảng mới
+            df.write \
+                .format("delta") \
+                .mode("overwrite") \
+                .save(delta_path)
+            print(f"Successfully initialized Delta Lake table at: {delta_path}")
     except Exception as e:
-        print(f"Error writing batch to ClickHouse for {table_name}: {e}")
+        print(f"Error merging batch to Delta Lake for {table_name}: {e}")
 
-# --- Định nghĩa Schema tĩnh cho việc đọc Stream Parquet ---
+# --- Hàm helper chuyển đổi Spark StructType thành Avro schema JSON string ---
+def type_to_avro_type(dataType):
+    if isinstance(dataType, StringType):
+        return ["null", "string"]
+    elif isinstance(dataType, LongType):
+        return ["null", "long"]
+    elif isinstance(dataType, IntegerType):
+        return ["null", "int"]
+    elif isinstance(dataType, DoubleType):
+        return ["null", "double"]
+    elif isinstance(dataType, TimestampType):
+        return ["null", {"type": "long", "logicalType": "timestamp-micros"}]
+    elif isinstance(dataType, BooleanType):
+        return ["null", "boolean"]
+    else:
+        return ["null", "string"]
+
+def struct_to_avro_schema(struct, name):
+    fields = []
+    for field in struct.fields:
+        fields.append({
+            "name": field.name,
+            "type": type_to_avro_type(field.dataType),
+            "default": None
+        })
+    schema = {
+        "type": "record",
+        "name": name,
+        "namespace": "avro",
+        "fields": fields
+    }
+    return json.dumps(schema)
+
+# --- Định nghĩa Schema tĩnh cho việc đọc Stream ---
 SCHEMAS = {
     "customers": StructType([
         StructField("id", LongType(), True),
@@ -175,43 +208,38 @@ SCHEMAS = {
     ])
 }
 
-def start_postgres_stream(spark, topic_name, table_name, schema):
-    input_path = f"s3a://banking-lakehouse/topics/{topic_name}/year=*/month=*/day=*/*.parquet"
+def start_stream(spark, topic_name, table_name, schema):
+    print(f"Starting Streaming from Kafka: {topic_name} -> {table_name}")
+    
+    # 1. Đọc stream từ Kafka Broker trực tiếp
+    df_raw = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "kafka:29092") \
+        .option("subscribe", topic_name) \
+        .option("startingOffsets", "latest") \
+        .load()
+        
+    # 2. Giải mã định dạng Avro từ Confluent (loại bỏ 5 bytes magic header)
+    df_avro = df_raw.withColumn("avro_payload", expr("substring(value, 6)"))
+    
+    avro_schema = struct_to_avro_schema(schema, table_name)
+    from pyspark.sql.avro.functions import from_avro
+    
+    df_decoded = df_avro.withColumn("data", from_avro(col("avro_payload"), avro_schema)) \
+                        .select("data.*")
+        
+    # 3. Ép kiểu và chuẩn hóa
+    if "created_at" in df_decoded.columns:
+        df_decoded = df_decoded.withColumn("created_at", (col("created_at") / 1000000.0).cast(TimestampType()))
+    if "transaction_date" in df_decoded.columns:
+        df_decoded = df_decoded.withColumn("transaction_date", (col("transaction_date") / 1000000.0).cast(TimestampType()))
+    if "timestamp" in df_decoded.columns:
+        df_decoded = df_decoded.withColumn("timestamp", col("timestamp").cast(TimestampType()))
+        
     checkpoint_path = f"s3a://banking-lakehouse/checkpoints/{table_name}"
     
-    print(f"Starting Parquet stream for {topic_name} -> {table_name}")
-    
-    df_stream = spark.readStream \
-        .schema(schema) \
-        .parquet(input_path)
-        
-    if "created_at" in df_stream.columns:
-        df_stream = df_stream.withColumn("created_at", (col("created_at") / 1000000.0).cast(TimestampType()))
-    if "transaction_date" in df_stream.columns:
-        df_stream = df_stream.withColumn("transaction_date", (col("transaction_date") / 1000000.0).cast(TimestampType()))
-        
-    query = df_stream.writeStream \
-        .foreachBatch(lambda batch_df, batch_id: write_to_clickhouse_and_delta(batch_df, batch_id, table_name)) \
-        .option("checkpointLocation", checkpoint_path) \
-        .start()
-        
-    return query
-
-def start_mongo_stream(spark, topic_name, table_name, schema):
-    input_path = f"s3a://banking-lakehouse/topics/mongo.banking_events.{topic_name}/year=*/month=*/day=*/*.parquet"
-    checkpoint_path = f"s3a://banking-lakehouse/checkpoints/{table_name}"
-    
-    print(f"Starting Parquet stream for MongoDB: {topic_name} -> {table_name}")
-    
-    df_stream = spark.readStream \
-        .schema(schema) \
-        .parquet(input_path)
-        
-    if "timestamp" in df_stream.columns:
-        df_stream = df_stream.withColumn("timestamp", col("timestamp").cast(TimestampType()))
-        
-    query = df_stream.writeStream \
-        .foreachBatch(lambda batch_df, batch_id: write_to_clickhouse_and_delta(batch_df, batch_id, table_name)) \
+    query = df_decoded.writeStream \
+        .foreachBatch(lambda batch_df, batch_id: write_to_delta(batch_df, batch_id, table_name)) \
         .option("checkpointLocation", checkpoint_path) \
         .start()
         
@@ -221,19 +249,19 @@ def main():
     spark = create_spark_session()
     queries = []
     
-    # 1. Các stream từ PostgreSQL
-    queries.append(start_postgres_stream(spark, "postgres.public.customers", "silver_postgres_customers", SCHEMAS["customers"]))
-    queries.append(start_postgres_stream(spark, "postgres.public.cards", "silver_postgres_cards", SCHEMAS["cards"]))
-    queries.append(start_postgres_stream(spark, "postgres.public.transactions", "silver_postgres_transactions", SCHEMAS["transactions"]))
+    # 1. Khởi chạy các stream từ PostgreSQL
+    queries.append(start_stream(spark, "postgres.public.customers", "silver_postgres_customers", SCHEMAS["customers"]))
+    queries.append(start_stream(spark, "postgres.public.cards", "silver_postgres_cards", SCHEMAS["cards"]))
+    queries.append(start_stream(spark, "postgres.public.transactions", "silver_postgres_transactions", SCHEMAS["transactions"]))
     
-    # 2. Các stream từ MongoDB
-    queries.append(start_mongo_stream(spark, "login_events", "silver_mongo_login_events", SCHEMAS["login_events"]))
-    queries.append(start_mongo_stream(spark, "device_events", "silver_mongo_device_events", SCHEMAS["device_events"]))
-    queries.append(start_mongo_stream(spark, "fraud_events", "silver_mongo_fraud_events", SCHEMAS["fraud_events"]))
-    queries.append(start_mongo_stream(spark, "notification_logs", "silver_mongo_notification_logs", SCHEMAS["notification_logs"]))
-    queries.append(start_mongo_stream(spark, "audit_logs", "silver_mongo_audit_logs", SCHEMAS["audit_logs"]))
+    # 2. Khởi chạy các stream từ MongoDB
+    queries.append(start_stream(spark, "login_events", "silver_mongo_login_events", SCHEMAS["login_events"]))
+    queries.append(start_stream(spark, "device_events", "silver_mongo_device_events", SCHEMAS["device_events"]))
+    queries.append(start_stream(spark, "fraud_events", "silver_mongo_fraud_events", SCHEMAS["fraud_events"]))
+    queries.append(start_stream(spark, "notification_logs", "silver_mongo_notification_logs", SCHEMAS["notification_logs"]))
+    queries.append(start_stream(spark, "audit_logs", "silver_mongo_audit_logs", SCHEMAS["audit_logs"]))
     
-    print("All Structured Streaming queries have started. Awaiting termination...")
+    print("All Kafka Structured Streaming queries have started. Awaiting termination...")
     spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":

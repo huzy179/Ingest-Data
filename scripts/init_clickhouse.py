@@ -162,7 +162,7 @@ DDL_QUERIES = [
     ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.audit_logs/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
     """,
     
-    # 10. analytics.silver_postgres_customers
+    # 10. analytics.silver_postgres_customers (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_postgres_customers (
         id Nullable(Int64),
@@ -187,10 +187,10 @@ DDL_QUERIES = [
         fico_score Nullable(Int32),
         num_credit_cards Nullable(Int32),
         created_at Nullable(DateTime)
-    ) ENGINE = ReplacingMergeTree(created_at) ORDER BY id SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_postgres_customers', 'minio_admin', 'minio_password');
     """,
     
-    # 11. analytics.silver_postgres_cards
+    # 11. analytics.silver_postgres_cards (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_postgres_cards (
         id Nullable(Int32),
@@ -209,10 +209,10 @@ DDL_QUERIES = [
         card_on_dark_web Nullable(String),
         status Nullable(String),
         created_at Nullable(DateTime)
-    ) ENGINE = ReplacingMergeTree(created_at) ORDER BY (customer_id, card_index) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_postgres_cards', 'minio_admin', 'minio_password');
     """,
     
-    # 12. analytics.silver_postgres_transactions
+    # 12. analytics.silver_postgres_transactions (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_postgres_transactions (
         id Nullable(Int64),
@@ -232,10 +232,10 @@ DDL_QUERIES = [
         is_fraud Nullable(String),
         transaction_date Nullable(DateTime),
         description Nullable(String)
-    ) ENGINE = MergeTree() ORDER BY (card_id, transaction_date) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_postgres_transactions', 'minio_admin', 'minio_password');
     """,
     
-    # 13. analytics.silver_mongo_login_events
+    # 13. analytics.silver_mongo_login_events (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_mongo_login_events (
         _id Nullable(String),
@@ -246,10 +246,10 @@ DDL_QUERIES = [
         status Nullable(String),
         event_source Nullable(String),
         location Nullable(String)
-    ) ENGINE = MergeTree() ORDER BY (user_id, timestamp) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_mongo_login_events', 'minio_admin', 'minio_password');
     """,
     
-    # 14. analytics.silver_mongo_device_events
+    # 14. analytics.silver_mongo_device_events (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_mongo_device_events (
         _id Nullable(String),
@@ -261,10 +261,10 @@ DDL_QUERIES = [
         event_source Nullable(String),
         location Nullable(String),
         timestamp Nullable(DateTime)
-    ) ENGINE = MergeTree() ORDER BY (user_id, timestamp) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_mongo_device_events', 'minio_admin', 'minio_password');
     """,
     
-    # 15. analytics.silver_mongo_fraud_events
+    # 15. analytics.silver_mongo_fraud_events (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_mongo_fraud_events (
         _id Nullable(String),
@@ -278,10 +278,10 @@ DDL_QUERIES = [
         fraud_reason Nullable(String),
         status Nullable(String),
         reported_at Nullable(String)
-    ) ENGINE = MergeTree() ORDER BY (customer_id, transaction_date) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_mongo_fraud_events', 'minio_admin', 'minio_password');
     """,
     
-    # 16. analytics.silver_mongo_notification_logs
+    # 16. analytics.silver_mongo_notification_logs (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_mongo_notification_logs (
         _id Nullable(String),
@@ -291,10 +291,10 @@ DDL_QUERIES = [
         message_body Nullable(String),
         timestamp Nullable(String),
         status Nullable(String)
-    ) ENGINE = MergeTree() ORDER BY (customer_id, timestamp) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_mongo_notification_logs', 'minio_admin', 'minio_password');
     """,
     
-    # 17. analytics.silver_mongo_audit_logs
+    # 17. analytics.silver_mongo_audit_logs (DeltaLake External Table)
     """
     CREATE TABLE IF NOT EXISTS analytics.silver_mongo_audit_logs (
         _id Nullable(String),
@@ -303,7 +303,7 @@ DDL_QUERIES = [
         target_id Nullable(Int64),
         timestamp Nullable(String),
         details Nullable(String)
-    ) ENGINE = MergeTree() ORDER BY (target_id, timestamp) SETTINGS allow_nullable_key = 1;
+    ) ENGINE = DeltaLake('http://minio:9000/banking-lakehouse/silver/delta/silver_mongo_audit_logs', 'minio_admin', 'minio_password');
     """,
     
     # 18. analytics.gold_fraud_analysis
@@ -393,7 +393,6 @@ def main():
     print("\nInitializing ClickHouse databases and tables...")
     for idx, query in enumerate(DDL_QUERIES):
         query_clean = " ".join(query.strip().split())
-        # Print a short preview of the query
         preview = query_clean[:60] + "..." if len(query_clean) > 60 else query_clean
         print(f"Running query {idx+1}/{len(DDL_QUERIES)}: {preview}")
         if not execute_query(query):

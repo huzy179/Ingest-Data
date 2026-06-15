@@ -1,5 +1,6 @@
 import os
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import current_date
 
 def create_spark_session():
     # Khởi tạo Spark Session với cấu hình AWS S3A để ghi dữ liệu vào MinIO
@@ -29,13 +30,17 @@ def ingest_table(spark, table_name):
         .option("driver", "org.postgresql.Driver") \
         .load()
         
+    # Thêm cột load_date để làm phân vùng bất biến (Immutable Partitioning)
+    df_partitioned = df.withColumn("load_date", current_date().cast("string"))
+        
     # Đường dẫn ghi trên MinIO
     output_path = f"s3a://banking-lakehouse/batch/postgres/{table_name}"
     
-    # Ghi đè (overwrite) dữ liệu dạng Parquet/JSON ở Bronze batch layer
-    df.write \
+    # Ghi dữ liệu dạng JSON vào Bronze layer phân vùng theo load_date
+    df_partitioned.write \
         .format("json") \
-        .mode("overwrite") \
+        .partitionBy("load_date") \
+        .mode("append") \
         .save(output_path)
         
     print(f"Successfully ingested {df.count()} rows from {table_name} to {output_path}")

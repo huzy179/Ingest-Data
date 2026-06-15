@@ -10,19 +10,16 @@ def create_spark_session():
         .config("spark.hadoop.fs.s3a.secret.key", "minio_password") \
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
         .getOrCreate()
     return spark
 
-def read_from_clickhouse(spark, table_name):
-    jdbc_url = "jdbc:clickhouse://clickhouse:8123/analytics"
-    return spark.read \
-        .format("jdbc") \
-        .option("url", jdbc_url) \
-        .option("dbtable", table_name) \
-        .option("user", "default") \
-        .option("password", "admin") \
-        .option("driver", "com.clickhouse.jdbc.ClickHouseDriver") \
-        .load()
+def read_from_delta(spark, table_name):
+    # Đọc dữ liệu từ Tầng Delta Lake Silver trên MinIO
+    delta_path = f"s3a://banking-lakehouse/silver/delta/{table_name}"
+    print(f"Reading from Delta Table: {delta_path}")
+    return spark.read.format("delta").load(delta_path)
 
 def write_to_clickhouse(df, table_name):
     # Điền chuỗi rỗng cho các cột string bị null để tránh lỗi nullability của ClickHouse
@@ -63,12 +60,12 @@ def write_to_clickhouse(df, table_name):
 def build_gold_fraud_analysis(spark):
     print("Building Gold Fraud Analysis Table...")
     
-    # Đọc dữ liệu từ tầng Silver trong ClickHouse
-    df_tx = read_from_clickhouse(spark, "silver_postgres_transactions")
-    df_cards = read_from_clickhouse(spark, "silver_postgres_cards")
-    df_cust = read_from_clickhouse(spark, "silver_postgres_customers")
-    df_fraud = read_from_clickhouse(spark, "silver_mongo_fraud_events")
-    df_notif = read_from_clickhouse(spark, "silver_mongo_notification_logs")
+    # Đọc dữ liệu từ tầng Silver Delta Lake trên MinIO (Source of Truth)
+    df_tx = read_from_delta(spark, "silver_postgres_transactions")
+    df_cards = read_from_delta(spark, "silver_postgres_cards")
+    df_cust = read_from_delta(spark, "silver_postgres_customers")
+    df_fraud = read_from_delta(spark, "silver_mongo_fraud_events")
+    df_notif = read_from_delta(spark, "silver_mongo_notification_logs")
     
     # 1. Join Transactions với Cards và Customers
     df_enriched = df_tx.join(df_cards, df_tx.card_id == df_cards.id, "inner") \
@@ -101,8 +98,6 @@ def build_gold_fraud_analysis(spark):
                               )
                               
     # 3. Join với Notification Logs (lấy trạng thái thông báo sms/email nếu có)
-    # Lọc notification log liên quan đến giao dịch (có chứa transaction_id trong message_body hoặc map theo customer_id)
-    # Ở đây chúng ta lấy notify gần nhất của customer
     window_spec = Window.partitionBy("customer_id").orderBy(col("timestamp").desc())
     df_latest_notif = df_notif.withColumn("rn", row_number().over(window_spec)) \
                               .filter(col("rn") == 1) \
@@ -128,12 +123,12 @@ def build_gold_fraud_analysis(spark):
 def build_gold_user_behavior_summary(spark):
     print("Building Gold User Behavior Summary...")
     
-    # Đọc dữ liệu
-    df_tx = read_from_clickhouse(spark, "silver_postgres_transactions")
-    df_cards = read_from_clickhouse(spark, "silver_postgres_cards")
-    df_cust = read_from_clickhouse(spark, "silver_postgres_customers")
-    df_logins = read_from_clickhouse(spark, "silver_mongo_login_events")
-    df_devices = read_from_clickhouse(spark, "silver_mongo_device_events")
+    # Đọc dữ liệu từ tầng Silver Delta Lake trên MinIO
+    df_tx = read_from_delta(spark, "silver_postgres_transactions")
+    df_cards = read_from_delta(spark, "silver_postgres_cards")
+    df_cust = read_from_delta(spark, "silver_postgres_customers")
+    df_logins = read_from_delta(spark, "silver_mongo_login_events")
+    df_devices = read_from_delta(spark, "silver_mongo_device_events")
     
     # 1. Tính toán Transaction metrics
     df_tx_stats = df_tx.join(df_cards, df_tx.card_id == df_cards.id, "inner") \
@@ -147,11 +142,11 @@ def build_gold_user_behavior_summary(spark):
                        
     # 2. Tính failed logins
     df_login_stats = df_logins.groupBy("user_id") \
-                             .agg(
-                                 sum(when(col("status") == "Failed", 1).otherwise(0)).alias("total_failed_logins"),
-                                 count("status").alias("total_logins")
-                             )
-                             
+                              .agg(
+                                  sum(when(col("status") == "Failed", 1).otherwise(0)).alias("total_failed_logins"),
+                                  count("status").alias("total_logins")
+                              )
+                              
     # 3. Xác định hệ điều hành (OS) chính của thiết bị
     window_spec = Window.partitionBy("user_id").orderBy(col("os_cnt").desc())
     df_os_counts = df_devices.groupBy("user_id", "os").agg(count("os").alias("os_cnt"))

@@ -4,7 +4,6 @@ from pyspark.sql.functions import col, row_number, to_timestamp, when
 from pyspark.sql.window import Window
 
 def create_spark_session():
-    # Khởi tạo Spark Session có tích hợp Delta Lake Extension và Catalog
     spark = SparkSession.builder \
         .appName("Data-Lakehouse-Silver-Transformation") \
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
@@ -31,40 +30,34 @@ def get_input_path(topic, execution_date):
         print(f"Error parsing date {execution_date}: {e}. Falling back to wildcard path.")
         return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.parquet"
 
-def write_to_clickhouse_and_delta(df, table_name):
-    # Ghi dữ liệu vào Delta Lake trên MinIO (Silver Layer Delta)
+def write_to_delta(df, table_name):
+    # Ghi dữ liệu vào Delta Lake trên MinIO (Silver Layer Delta) sử dụng MERGE INTO
     delta_path = f"s3a://banking-lakehouse/silver/delta/{table_name}"
+    spark = df.sparkSession
+    
+    from delta.tables import DeltaTable
+    primary_key = "_id" if "_id" in df.columns else "id"
+    
     try:
-        df.write \
-            .format("delta") \
-            .mode("append") \
-            .save(delta_path)
-        print(f"Successfully wrote data to Delta Lake: {delta_path}")
+        if DeltaTable.isDeltaTable(spark, delta_path):
+            delta_table = DeltaTable.forPath(spark, delta_path)
+            
+            # Upsert dữ liệu mới
+            delta_table.alias("target").merge(
+                source = df.alias("source"),
+                condition = f"target.{primary_key} = source.{primary_key}"
+            ).whenMatchedUpdateAll() \
+             .whenNotMatchedInsertAll() \
+             .execute()
+            print(f"Successfully merged batch data to Delta Lake: {delta_path}")
+        else:
+            df.write \
+                .format("delta") \
+                .mode("overwrite") \
+                .save(delta_path)
+            print(f"Successfully initialized Delta Lake table at: {delta_path}")
     except Exception as e:
         print(f"Error writing to Delta Lake for {table_name}: {e}")
-
-    # Điền chuỗi rỗng cho các cột string bị null để tránh lỗi nullability của ClickHouse
-    df_filled = df.na.fill("")
-    
-    # Tự động chuyển đổi các cột struct hoặc array thành JSON string để ClickHouse JDBC nhận dạng được
-    from pyspark.sql.types import StructType, ArrayType
-    from pyspark.sql.functions import to_json
-    for field in df_filled.schema.fields:
-        if isinstance(field.dataType, (StructType, ArrayType)):
-            df_filled = df_filled.withColumn(field.name, to_json(col(field.name)))
-            
-    jdbc_url = "jdbc:clickhouse://clickhouse:8123/analytics"
-    
-    df_filled.write \
-        .format("jdbc") \
-        .option("url", jdbc_url) \
-        .option("dbtable", table_name) \
-        .option("user", "default") \
-        .option("password", "admin") \
-        .option("driver", "com.clickhouse.jdbc.ClickHouseDriver") \
-        .mode("append") \
-        .save()
-    print(f"Successfully wrote {df_filled.count()} rows to ClickHouse table: analytics.{table_name}")
 
 def transform_postgres_customers(spark, execution_date=None):
     print("Transforming Postgres Customers...")
@@ -99,7 +92,7 @@ def transform_postgres_customers(spark, execution_date=None):
         .withColumn("total_debt", col("total_debt").cast("double")) \
         .withColumn("created_at", (col("created_at").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_customers")
+    write_to_delta(df_cleaned, "silver_postgres_customers")
 
 def transform_postgres_cards(spark, execution_date=None):
     print("Transforming Postgres Cards...")
@@ -127,7 +120,7 @@ def transform_postgres_cards(spark, execution_date=None):
         .withColumn("year_pin_last_changed", col("year_pin_last_changed").cast("integer")) \
         .withColumn("created_at", (col("created_at").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_cards")
+    write_to_delta(df_cleaned, "silver_postgres_cards")
 
 def transform_postgres_transactions(spark, execution_date=None):
     print("Transforming Postgres Transactions...")
@@ -156,7 +149,7 @@ def transform_postgres_transactions(spark, execution_date=None):
         .withColumn("day", col("day").cast("integer")) \
         .withColumn("transaction_date", (col("transaction_date").cast("double") / 1000000.0).cast("timestamp"))
         
-    write_to_clickhouse_and_delta(df_cleaned, "silver_postgres_transactions")
+    write_to_delta(df_cleaned, "silver_postgres_transactions")
 
 MONGO_SCHEMAS = {
     "login_events": [
@@ -234,10 +227,10 @@ def transform_mongo_events(spark, topic_name, table_name, execution_date=None):
         else:
             df = df.withColumn(col_name, col(col_name).cast(col_type))
             
-    # Lựa chọn đúng thứ tự các cột như ClickHouse yêu cầu
+    # Lựa chọn đúng thứ tự các cột
     df_cleaned = df.select([col_name for col_name, _ in schema_cols])
     
-    write_to_clickhouse_and_delta(df_cleaned, table_name)
+    write_to_delta(df_cleaned, table_name)
 
 def main():
     import argparse
