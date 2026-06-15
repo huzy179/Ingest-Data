@@ -33,9 +33,9 @@ def ingest_collection(spark, collection_name):
     # Đường dẫn ghi trên MinIO
     output_path = f"s3a://banking-lakehouse/batch/mongodb/{collection_name}"
     
-    # Ghi dữ liệu dạng JSON vào Bronze layer phân vùng theo load_date
+    # Ghi dữ liệu dạng Parquet vào Bronze layer phân vùng theo load_date để tối ưu dung lượng và tốc độ quét
     df_partitioned.write \
-        .format("json") \
+        .format("parquet") \
         .partitionBy("load_date") \
         .mode("append") \
         .save(output_path)

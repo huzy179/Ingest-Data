@@ -50,8 +50,7 @@ flowchart TD
         
         %% Bronze Layer
         subgraph Bronze_Layer ["Bronze Layer (Raw Archive)"]
-            S3Sink -->|Ghi file nén Parquet\n- topics/| MinIO
-            SparkBatch -->|Ghi đè file JSON\n- batch/| MinIO
+            SparkBatch -->|Ghi đè file Parquet\n- batch/| MinIO
         end
         
         %% Silver Delta Tables
@@ -68,7 +67,7 @@ flowchart TD
         Kafka -->|Đọc Stream trực tiếp\n- spark.readStream.format kafka| SparkStream
         
         %% Spark Batch đọc từ Bronze thô
-        MinIO -->|Đọc Batch Parquet/JSON| SparkBatchTrans
+        MinIO -->|Đọc Batch Parquet| SparkBatchTrans
         
         %% Spark Stream & Batch chỉ ghi xuống Silver Delta (Không ghi ClickHouse JDBC để tránh bottleneck)
         SparkStream -->|Ghi Delta format| Delta
@@ -127,10 +126,11 @@ flowchart TD
 2.  **Trích xuất (PySpark Batch Ingest):**
     *   Job `batch_ingest_postgres.py` kết nối trực tiếp đến Postgres bằng JDBC để lấy toàn bộ dữ liệu hoặc dữ liệu gia tăng.
     *   Job `batch_ingest_mongodb.py` kết nối trực tiếp đến Mongo bằng `Mongo Spark Connector`.
-3.  **Lưu trữ thô (MinIO Bronze Batch):** Spark ghi đè (mode `overwrite`) dữ liệu dưới dạng JSON thô vào MinIO tại đường dẫn: `s3a://banking-lakehouse/batch/<database_type>/<table_name>/`.
+3.  **Lưu trữ thô (MinIO Bronze Batch):** Spark ghi đè (mode `overwrite`) dữ liệu dưới dạng Parquet thô vào MinIO tại đường dẫn: `s3a://banking-lakehouse/batch/<database_type>/<table_name>/`.
 4.  **Xử lý tổng hợp (Spark Batch Transform):** Airflow trigger DAG `lakehouse_spark_orchestration`:
     *   `transform_silver.py` đọc từ thư mục batch trong MinIO, chuẩn hóa dữ liệu và chỉ ghi vào Delta Lake Silver trên MinIO (ClickHouse Silver tự động tham chiếu dữ liệu mới này thông qua `DeltaLake` engine).
     *   **Tạo Tầng Gold:** Job `transform_gold.py` đọc dữ liệu đầu vào trực tiếp từ **Tầng Delta Lake Silver trên MinIO** (thành phần duy nhất làm Source of Truth). Sau khi thực hiện các phép Join và tổng hợp chỉ số nghiệp vụ, kết quả Gold được ghi vào các bảng Gold vật lý của ClickHouse (qua JDBC) phục vụ trực tiếp cho BI Dashboard và người dùng cuối.
+
 
 ---
 
