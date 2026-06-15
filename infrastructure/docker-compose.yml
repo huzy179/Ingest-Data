@@ -190,7 +190,11 @@ services:
     depends_on:
       - minio
       - clickhouse
-    command: /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.clickhouse:clickhouse-jdbc:0.6.0,com.amazonaws:aws-java-sdk-bundle:1.12.262,io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.spark:spark-avro_2.12:3.5.1 /opt/spark/spark_apps/stream_transform_silver.py
+    command: >
+      bash -c "
+      pip3 install --no-deps delta-spark==3.1.0 &&
+      /opt/spark/bin/spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,com.clickhouse:clickhouse-jdbc:0.6.0,com.amazonaws:aws-java-sdk-bundle:1.12.262,io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.apache.spark:spark-avro_2.12:3.5.1 /opt/spark/spark_apps/stream_transform_silver.py
+      "
 
 
 
@@ -203,23 +207,31 @@ services:
       - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:admin@postgres:5432/airflow
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - _PIP_ADDITIONAL_REQUIREMENTS=docker sqlalchemy pymongo psycopg2-binary
+      - CONNECTION_CHECK_MAX_COUNT=0
     volumes:
       - airflow_data:/opt/airflow
-    command: >
+    command: |
       bash -c "
       python -c \"
-      import psycopg2
-      try:
-          conn = psycopg2.connect('postgresql://admin:admin@postgres:5432/postgres')
-          conn.autocommit = True
-          cursor = conn.cursor()
-          cursor.execute('SELECT 1 FROM pg_database WHERE datname = \\'airflow\\'')
-          if not cursor.fetchone():
-              cursor.execute('CREATE DATABASE airflow')
-          cursor.close()
-          conn.close()
-      except Exception as e:
-          print('Database creation error:', e)
+      import psycopg2, time
+      for i in range(30):
+          try:
+              conn = psycopg2.connect('postgresql://admin:admin@postgres:5432/postgres')
+              conn.autocommit = True
+              cursor = conn.cursor()
+              cursor.execute('SELECT 1 FROM pg_database WHERE datname = \\'airflow\\'')
+              if not cursor.fetchone():
+                  cursor.execute('CREATE DATABASE airflow')
+              cursor.close()
+              conn.close()
+              print('Database airflow checked/created successfully!')
+              break
+          except Exception as e:
+              print(f'Database creation attempt {i+1} failed: {e}')
+              time.sleep(2)
+      else:
+          print('Failed to connect to postgres after 30 attempts')
+          import sys; sys.exit(1)
       \" &&
       airflow db init &&
       airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com

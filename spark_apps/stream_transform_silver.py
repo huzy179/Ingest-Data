@@ -208,7 +208,20 @@ SCHEMAS = {
     ])
 }
 
-def start_stream(spark, topic_name, table_name, schema):
+def fetch_schema_from_registry(subject_name):
+    import urllib.request
+    import json
+    url = f"http://schema-registry:8081/subjects/{subject_name}/versions/latest"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return data["schema"]
+    except Exception as e:
+        print(f"Error fetching schema for {subject_name} from registry: {e}")
+        return None
+
+def start_stream(spark, topic_name, table_name):
     print(f"Starting Streaming from Kafka: {topic_name} -> {table_name}")
     
     # 1. Đọc stream từ Kafka Broker trực tiếp
@@ -216,19 +229,27 @@ def start_stream(spark, topic_name, table_name, schema):
         .format("kafka") \
         .option("kafka.bootstrap.servers", "kafka:29092") \
         .option("subscribe", topic_name) \
-        .option("startingOffsets", "latest") \
+        .option("startingOffsets", "earliest") \
         .load()
         
-    # 2. Giải mã định dạng Avro từ Confluent (loại bỏ 5 bytes magic header)
-    df_avro = df_raw.withColumn("avro_payload", expr("substring(value, 6)"))
-    
-    avro_schema = struct_to_avro_schema(schema, table_name)
+    # Lọc bỏ các tin nhắn rỗng (tombstones / null values) để tránh lỗi parse
+    df_non_null = df_raw.filter(col("value").isNotNull())
+        
+    # 2. Lấy schema tự động từ Schema Registry
+    subject_name = f"{topic_name}-value"
+    avro_schema = fetch_schema_from_registry(subject_name)
+    if not avro_schema:
+        raise ValueError(f"Could not retrieve Avro schema for subject {subject_name}")
+        
+    # 3. Giải mã định dạng Avro từ Confluent (loại bỏ 5 bytes magic header)
+    df_avro = df_non_null.withColumn("avro_payload", expr("substring(value, 6)"))
     from pyspark.sql.avro.functions import from_avro
     
-    df_decoded = df_avro.withColumn("data", from_avro(col("avro_payload"), avro_schema)) \
+    # Sử dụng mode PERMISSIVE để bỏ qua các dòng lỗi thay vì crash stream
+    df_decoded = df_avro.withColumn("data", from_avro(col("avro_payload"), avro_schema, {"mode": "PERMISSIVE"})) \
                         .select("data.*")
         
-    # 3. Ép kiểu và chuẩn hóa
+    # 4. Ép kiểu và chuẩn hóa
     if "created_at" in df_decoded.columns:
         df_decoded = df_decoded.withColumn("created_at", (col("created_at") / 1000000.0).cast(TimestampType()))
     if "transaction_date" in df_decoded.columns:
@@ -250,16 +271,16 @@ def main():
     queries = []
     
     # 1. Khởi chạy các stream từ PostgreSQL
-    queries.append(start_stream(spark, "postgres.public.customers", "silver_postgres_customers", SCHEMAS["customers"]))
-    queries.append(start_stream(spark, "postgres.public.cards", "silver_postgres_cards", SCHEMAS["cards"]))
-    queries.append(start_stream(spark, "postgres.public.transactions", "silver_postgres_transactions", SCHEMAS["transactions"]))
+    queries.append(start_stream(spark, "postgres.public.customers", "silver_postgres_customers"))
+    queries.append(start_stream(spark, "postgres.public.cards", "silver_postgres_cards"))
+    queries.append(start_stream(spark, "postgres.public.transactions", "silver_postgres_transactions"))
     
     # 2. Khởi chạy các stream từ MongoDB
-    queries.append(start_stream(spark, "login_events", "silver_mongo_login_events", SCHEMAS["login_events"]))
-    queries.append(start_stream(spark, "device_events", "silver_mongo_device_events", SCHEMAS["device_events"]))
-    queries.append(start_stream(spark, "fraud_events", "silver_mongo_fraud_events", SCHEMAS["fraud_events"]))
-    queries.append(start_stream(spark, "notification_logs", "silver_mongo_notification_logs", SCHEMAS["notification_logs"]))
-    queries.append(start_stream(spark, "audit_logs", "silver_mongo_audit_logs", SCHEMAS["audit_logs"]))
+    queries.append(start_stream(spark, "mongo.banking_events.login_events", "silver_mongo_login_events"))
+    queries.append(start_stream(spark, "mongo.banking_events.device_events", "silver_mongo_device_events"))
+    queries.append(start_stream(spark, "mongo.banking_events.fraud_events", "silver_mongo_fraud_events"))
+    queries.append(start_stream(spark, "mongo.banking_events.notification_logs", "silver_mongo_notification_logs"))
+    queries.append(start_stream(spark, "mongo.banking_events.audit_logs", "silver_mongo_audit_logs"))
     
     print("All Kafka Structured Streaming queries have started. Awaiting termination...")
     spark.streams.awaitAnyTermination()

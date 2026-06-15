@@ -1,5 +1,5 @@
 {
-  "name": "mongodb-source",
+  "name": "mongodb-source-v2",
   "config": {
     "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
     "tasks.max": "1",

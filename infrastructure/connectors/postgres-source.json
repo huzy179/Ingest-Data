@@ -1,5 +1,5 @@
 {
-  "name": "postgres-source",
+  "name": "postgres-source-v2",
   "config": {
     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
     "tasks.max": "1",
