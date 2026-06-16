@@ -17,6 +17,8 @@ def create_spark_session():
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true") \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .config("spark.databricks.delta.autoCompact.enabled", "true") \
+        .config("spark.databricks.delta.optimizeWrite.enabled", "true") \
         .getOrCreate()
     return spark
 
@@ -262,6 +264,7 @@ def start_stream(spark, topic_name, table_name):
     query = df_decoded.writeStream \
         .foreachBatch(lambda batch_df, batch_id: write_to_delta(batch_df, batch_id, table_name)) \
         .option("checkpointLocation", checkpoint_path) \
+        .trigger(processingTime='5 minutes') \
         .start()
         
     return query
