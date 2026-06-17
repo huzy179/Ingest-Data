@@ -275,11 +275,20 @@ Khi đưa kiến trúc này vào môi trường Production của các ngân hàn
     *   *Đường dẫn lưu trữ:* `s3a://banking-lakehouse/batch/postgres/<table_name>/load_date=YYYY-MM-DD/`
     *   Mỗi khi cần chạy lại dữ liệu lịch sử, Spark chỉ cần đọc đúng thư mục partition của ngày cần replay.
 
-### 6.4. Tối ưu hóa hiệu năng ClickHouse khi truy vấn trực tiếp từ MinIO (Delta Engine)
-*   **Thách thức:** `DeltaLake` engine trong ClickHouse là read-only, dữ liệu thực tế vẫn nằm trên MinIO. Do đó, nếu end-user truy vấn liên tục trên các bảng này, ClickHouse sẽ phải thực hiện quét file qua mạng (Network I/O) liên tục, gây chậm hệ thống và tốn băng thông, đặc biệt là khi luồng streaming ghi ra quá nhiều file Parquet nhỏ (Small File Problem).
-*   **Giải pháp:**
-    *   **Compaction:** Thiết lập job định kỳ (qua Airflow chạy lệnh Spark SQL `OPTIMIZE silver_postgres_transactions COALESCE 10`) để gom các file nhỏ trong Delta Lake thành các file Parquet có kích thước tối ưu (128MB - 256MB).
-    *   **Materialization (ClickHouse Materialized Views):** Đối với các bảng Silver có tần suất truy vấn rất cao cho Dashboard, ClickHouse sẽ tạo một bảng vật lý `ReplacingMergeTree` trên ClickHouse và sử dụng **Materialized View** để đồng bộ tự động dữ liệu từ Delta Lake External Table sang bảng vật lý này. Cách này giúp tăng tốc độ query lên gấp 10 lần nhờ khai thác tối đa lưu trữ SSD cục bộ của ClickHouse.
+### 6.4. Giải quyết bài toán Small Files & Tối ưu hóa hiệu năng ClickHouse (Delta Engine)
+*   **Thách thức (Small Files Problem):** Spark Streaming hoạt động theo cơ chế Micro-batch ghi dữ liệu liên tục xuống Delta Lake. Hậu quả là sinh ra hàng ngàn file Parquet cực nhỏ (vài KB đến vài trăm KB) mỗi ngày. Điều này làm phình to thư mục `_delta_log` (Metadata Overhead) và gây nghẽn cổ chai I/O cực kỳ nặng nề (Read Bottleneck) khi ClickHouse hoặc Spark Batch đọc Delta Table, do phải mở/đóng quá nhiều file nhỏ.
+*   **Giải pháp thiết kế và triển khai thực tế:**
+    1.  **Thiết lập Trigger Time (Phòng thủ từ xa):** Thay vì để Spark ghi liên tục, ta nâng cấu hình `.trigger(processingTime='5 minutes')` trong `stream_transform_silver.py`. Spark sẽ gom dữ liệu trên RAM trong 5 phút trước khi ghi xuống Delta Lake thành 1 file Parquet lớn hơn, giúp giảm 90% số lượng file rác ban đầu.
+    2.  **Kích hoạt Auto-Compaction & Optimize Write (Tự động hóa của Delta):** Cấu hình thêm thuộc tính Spark Session:
+        ```python
+        .config("spark.databricks.delta.autoCompact.enabled", "true")
+        .config("spark.databricks.delta.optimizeWrite.enabled", "true")
+        ```
+        Giúp Delta Lake ngầm gom các file nhỏ lại thành file to hơn trong lúc ghi mà không làm gián đoạn luồng streaming.
+    3.  **Lập lịch Bảo trì định kỳ (Daily OPTIMIZE & VACUUM - Trị tận gốc):** Lập lịch qua Airflow DAG `delta_lake_maintenance` gọi Spark Job chạy script `delta_maintenance.py` hàng ngày vào lúc nửa đêm:
+        *   **`OPTIMIZE <table_name>`**: Quét toàn bộ bảng Delta, gộp tất cả các file Parquet nhỏ còn lại thành các file chuẩn kích thước (~1GB) và ghi commit mới.
+        *   **`VACUUM <table_name> RETAIN 168 HOURS`**: Xóa vật lý toàn bộ các file rác Parquet cũ không còn sử dụng đã quá 7 ngày khỏi MinIO để giải phóng dung lượng ổ cứng, chỉ giữ lại dữ liệu lịch sử phục vụ Time Travel trong vòng 7 ngày.
+    4.  **Materialization (ClickHouse Materialized Views):** Đối với các bảng Silver có tần suất truy vấn rất cao cho Dashboard, ClickHouse sẽ tạo một bảng vật lý `ReplacingMergeTree` trên ClickHouse và sử dụng **Materialized View** để đồng bộ tự động dữ liệu từ Delta Lake External Table sang bảng vật lý này. Cách này giúp tăng tốc độ query lên gấp 10 lần nhờ khai thác tối đa lưu trữ SSD cục bộ của ClickHouse.
 
 ### 6.5. Đảm bảo an toàn thông tin (Data Security) và Chất lượng dữ liệu (Data Quality)
 *   **Kiểm soát chất lượng dữ liệu (Data Quality Layer):** Trước khi chuyển dữ liệu từ Silver sang Gold, cần chạy các kiểm tra chất lượng dữ liệu (sử dụng thư viện như **Great Expectations** hoặc Spark Assertions) để lọc các bản ghi lỗi cấu trúc, trùng khóa chính, hoặc lệch dữ liệu nghiệp vụ (ví dụ: giao dịch có số tiền âm). Các bản ghi lỗi sẽ được đưa vào một thư mục riêng (Dead Letter Queue - DLQ) để điều tra.

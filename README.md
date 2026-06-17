@@ -74,13 +74,15 @@ Hệ thống sử dụng các công nghệ tiên tiến như **Avro Serializatio
 ├── dags/                           # Airflow DAGs điều phối hệ thống
 │   ├── generate_data_dag.py        # DAG giả lập sinh dữ liệu live (chạy mỗi 5 phút)
 │   ├── batch_ingestion_dag.py      # DAG chạy Batch Ingestion PostgreSQL/MongoDB -> MinIO
-│   └── spark_orchestration_dag.py  # DAG submit các PySpark Jobs (chạy mỗi 30 phút)
+│   ├── spark_orchestration_dag.py  # DAG submit các PySpark Jobs (chạy mỗi 30 phút)
+│   └── delta_maintenance_dag.py    # DAG bảo trì Delta Lake (chạy 00:00 hàng ngày)
 ├── spark_apps/                     # Scripts xử lý dữ liệu PySpark
 │   ├── batch_ingest_postgres.py    # Batch Ingest Postgres -> MinIO Bronze (partition theo load_date)
 │   ├── batch_ingest_mongodb.py     # Batch Ingest MongoDB -> MinIO Bronze (partition theo load_date)
 │   ├── transform_silver.py         # Batch Transform: Bronze (MinIO) -> Delta Lake (Silver)
 │   ├── stream_transform_silver.py  # Stream Transform: Kafka (CDC Avro) -> Delta Lake (Silver)
-│   └── transform_gold.py           # Gold Transform: Delta Lake (Silver) -> ClickHouse Gold (JDBC)
+│   ├── transform_gold.py           # Gold Transform: Delta Lake (Silver) -> ClickHouse Gold (JDBC)
+│   └── delta_maintenance.py        # Script chạy OPTIMIZE & VACUUM cho 8 bảng Delta
 ├── scripts/                        # Các helper scripts phục vụ vận hành
 │   ├── init_clickhouse.py          # Khởi tạo DB analytics với DeltaLake Engine cho Silver tables
 │   ├── generate_live_data.py       # Script chạy tay giả lập giao dịch từ host
@@ -101,7 +103,7 @@ Hệ thống sử dụng các công nghệ tiên tiến như **Avro Serializatio
 
 ## 🛠️ Chi tiết các Dịch vụ Hạ tầng (Docker Services)
 
-Hệ thống chạy trên Docker với 10 dịch vụ liên kết chặt chẽ:
+Hệ thống chạy trên Docker với 11 dịch vụ liên kết chặt chẽ:
 1. **`postgres` (cổng 5434):** Cơ sở dữ liệu nghiệp vụ chính (`banking_core`), bật logical replication.
 2. **`mongo` (cổng 27017):** Kho lưu trữ phi cấu trúc (`banking_events`), bật Replica Set (`rs0`) để phục vụ CDC.
 3. **`kafka` (cổng 9092):** Message queue trung chuyển dữ liệu dạng sự kiện (Event Streaming).
@@ -127,6 +129,15 @@ Hệ thống chạy trên Docker với 10 dịch vụ liên kết chặt chẽ:
 *   **Tầng Gold (Serving Layer):** Cấu hình vật lý tối ưu bằng **`MergeTree` Engine** kèm theo các khóa chỉ mục sắp xếp (`ORDER BY`) và tính năng nullable key để đạt tốc độ truy vấn phân tích tối đa:
     *   `gold_fraud_analysis`: `ORDER BY (customer_id, transaction_date)`
     *   `gold_user_behavior_summary`: `ORDER BY customer_id`
+
+---
+
+## ⚡ Giải pháp Tối ưu hóa Delta Lake (Small Files Mitigation)
+
+Để khắc phục hiện tượng **"Small Files Problem"** (phát sinh từ cơ chế micro-batch của Spark Streaming ghi file parquet nhỏ liên tục gây quá tải Metadata log và nghẽn I/O khi đọc), hệ thống áp dụng:
+1. **Trigger Time (5 phút):** Cấu hình `processingTime='5 minutes'` trong `stream_transform_silver.py` để tích lũy dữ liệu trên RAM trước khi ghi xuống Delta.
+2. **Auto-Compaction & Optimize Write:** Bật các cấu hình tự động tối ưu hóa trong Spark Session của luồng Streaming.
+3. **Bảo trì Định kỳ (Daily Optimize & Vacuum):** Lập lịch qua Airflow DAG `delta_lake_maintenance` gọi Spark Job chạy `OPTIMIZE` (gộp file thành 1GB) và `VACUUM RETAIN 168 HOURS` (xóa file rác cũ quá 7 ngày).
 
 ---
 
@@ -177,6 +188,7 @@ Truy cập **[http://localhost:8080](http://localhost:8080)** (Tài khoản: `ad
 * Bật (Unpause) DAG **`live_data_generator_dag`** để bắt đầu sinh giao dịch live ngẫu nhiên vào hệ thống mỗi 5 phút.
 * Bật (Unpause) DAG **`lakehouse_batch_ingestion`** để chạy thử luồng Batch Ingestion trích xuất từ DB nguồn lên MinIO phân vùng theo load_date.
 * Bật (Unpause) DAG **`lakehouse_spark_orchestration`** để chạy các PySpark batch jobs biến đổi dữ liệu định kỳ.
+* Bật (Unpause) DAG **`delta_lake_maintenance`** để tự động chạy tối ưu hóa Delta Lake hàng ngày.
 
 ---
 
