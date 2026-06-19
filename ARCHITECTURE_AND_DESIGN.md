@@ -215,7 +215,7 @@ Trong kỷ nguyên số, dữ liệu của một doanh nghiệp (đặc biệt l
 | Tiêu chí so sánh | Luồng Batch Ingestion & Processing | Luồng Streaming Ingestion & Processing |
 | :--- | :--- | :--- |
 | **Cơ chế nạp (Ingestion)** | Quét định kỳ trực tiếp từ bảng/collection nguồn (Postgres JDBC / Mongo Client) | Đọc liên tục file log (WAL/Oplog) qua Debezium CDC đẩy lên Kafka |
-| **Định dạng tại MinIO Bronze** | JSON (.json) | Parquet (.parquet) |
+| **Định dạng tại MinIO Bronze** | Parquet (.parquet) | Parquet (.parquet) |
 | **Tần suất chạy** | Định kỳ (hàng giờ, hàng ngày) qua Airflow | Chạy liên tục 24/7 dưới dạng service |
 | **Độ trễ (Latency)** | Cao (Minutes đến Hours) | Thấp (Seconds đến Milliseconds) |
 | **Tải lên DB nguồn** | Có thể gây tải cao khi thực hiện `SELECT` toàn bộ bảng lớn | Cực kỳ nhẹ, không ảnh hưởng hiệu năng hoạt động của DB |

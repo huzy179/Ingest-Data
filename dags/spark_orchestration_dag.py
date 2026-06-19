@@ -22,6 +22,8 @@ def run_spark_job(script_name, execution_date=None):
         f"/opt/spark/spark_apps/{script_name}"
     ]
     if execution_date:
+        if not isinstance(execution_date, str):
+            execution_date = execution_date.strftime("%Y-%m-%d")
         command.extend(["--execution-date", execution_date])
     
     print(f"Starting Spark job: {script_name} with args {command[3:]}")
