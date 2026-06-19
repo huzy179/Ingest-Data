@@ -35,7 +35,7 @@ DDL_QUERIES = [
         fico_score Nullable(Int32),
         num_credit_cards Nullable(Int32),
         created_at Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.customers/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.customers/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 2. raw.postgres_cards
@@ -57,7 +57,7 @@ DDL_QUERIES = [
         card_on_dark_web Nullable(String),
         status Nullable(String),
         created_at Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.cards/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.cards/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 3. raw.postgres_transactions
@@ -80,7 +80,7 @@ DDL_QUERIES = [
         is_fraud Nullable(String),
         transaction_date Nullable(String),
         description Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.transactions/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/postgres.public.transactions/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 4. raw.mongo_customers
@@ -88,7 +88,7 @@ DDL_QUERIES = [
     CREATE TABLE IF NOT EXISTS raw.mongo_customers (
         _id Nullable(Int64),
         recent_transactions Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.customers/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.customers/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 5. raw.mongo_login_events
@@ -102,7 +102,7 @@ DDL_QUERIES = [
         status Nullable(String),
         event_source Nullable(String),
         location Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.login_events/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.login_events/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 6. raw.mongo_device_events
@@ -117,7 +117,7 @@ DDL_QUERIES = [
         event_source Nullable(String),
         location Nullable(String),
         timestamp Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.device_events/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.device_events/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 7. raw.mongo_fraud_events
@@ -134,7 +134,7 @@ DDL_QUERIES = [
         fraud_reason Nullable(String),
         status Nullable(String),
         reported_at Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.fraud_events/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.fraud_events/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 8. raw.mongo_notification_logs
@@ -147,7 +147,7 @@ DDL_QUERIES = [
         message_body Nullable(String),
         timestamp Nullable(String),
         status Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.notification_logs/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.notification_logs/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 9. raw.mongo_audit_logs
@@ -159,7 +159,7 @@ DDL_QUERIES = [
         target_id Nullable(Int64),
         timestamp Nullable(String),
         details Nullable(String)
-    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.audit_logs/year=*/month=*/day=*/*.json', 'minio_admin', 'minio_password', 'JSONEachRow');
+    ) ENGINE = S3('http://minio:9000/banking-lakehouse/topics/mongo.banking_events.audit_logs/year=*/month=*/day=*/*.parquet', 'minio_admin', 'minio_password', 'Parquet');
     """,
     
     # 10. analytics.silver_postgres_customers (DeltaLake External Table)
