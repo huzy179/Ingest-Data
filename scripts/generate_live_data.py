@@ -98,6 +98,8 @@ def main():
         # 2. Generate MongoDB Device & Login Events
         ua = random.choice(user_agents)
         login_status = "Success" if random.random() > 0.08 else "Failed"
+        device_type = "iOS" if ua["os"] == "iOS" else ("Android" if ua["os"] == "Android" else "Desktop")
+        event_source = "MobileApp" if ua["os"] in ["Android", "iOS"] else "WebBrowser"
         
         # Device event
         mongo_db["device_events"].insert_one({
@@ -105,9 +107,12 @@ def main():
             "device_id": f"dev_{customer_id}_{random.randint(1000, 9999)}",
             "os": ua["os"],
             "app_version": ua["version"],
-            "location": f"{merchant['city']}, {merchant['state']}",
+            "location": {
+                "lat": None,
+                "lon": None
+            },
             "event_type": "LoginAttempt",
-            "event_source": "MobileApp" if ua["os"] in ["Android", "iOS"] else "WebBrowser",
+            "event_source": event_source,
             "timestamp": now.isoformat()
         })
         
@@ -116,6 +121,12 @@ def main():
             "user_id": customer_id,
             "status": login_status,
             "ip_address": f"192.168.1.{random.randint(2, 254)}",
+            "device_type": device_type,
+            "event_source": event_source,
+            "location": {
+                "city": merchant["city"],
+                "state": merchant["state"]
+            },
             "timestamp": now.isoformat()
         })
         
@@ -125,10 +136,14 @@ def main():
             mongo_db["fraud_events"].insert_one({
                 "transaction_id": tx_id,
                 "customer_id": customer_id,
-                "risk_score": round(random.uniform(75.0, 99.9), 1),
+                "card_id": card_id,
+                "amount": amount,
+                "merchant": merchant["name"],
+                "transaction_date": tx_date_str,
+                "risk_score": int(round(random.uniform(75.0, 99.9))),
                 "fraud_reason": "High transaction amount or unusual location",
                 "status": "Flagged",
-                "timestamp": now.isoformat()
+                "reported_at": now.isoformat()
             })
             
             # MongoDB Notification Log
