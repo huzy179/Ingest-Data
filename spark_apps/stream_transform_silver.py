@@ -160,7 +160,7 @@ SCHEMAS = {
     "login_events": StructType([
         StructField("_id", StringType(), True),
         StructField("user_id", LongType(), True),
-        StructField("timestamp", StringType(), True),
+        StructField("timestamp", TimestampType(), True),
         StructField("ip_address", StringType(), True),
         StructField("device_type", StringType(), True),
         StructField("status", StringType(), True),
@@ -176,7 +176,7 @@ SCHEMAS = {
         StructField("event_type", StringType(), True),
         StructField("event_source", StringType(), True),
         StructField("location", StringType(), True),
-        StructField("timestamp", StringType(), True)
+        StructField("timestamp", TimestampType(), True)
     ]),
     "fraud_events": StructType([
         StructField("_id", StringType(), True),
