@@ -210,16 +210,31 @@ def transform_mongo_events(spark, topic_name, table_name, execution_date=None):
             
     from pyspark.sql.functions import lit
     
+    # Khử trùng lặp theo khóa chính _id để tránh lỗi Delta merge khi nguồn có trùng lặp
+    order_col = None
+    for possible_col in ["timestamp", "reported_at", "transaction_date"]:
+        if possible_col in df.columns:
+            order_col = possible_col
+            break
+            
+    if order_col:
+        window_spec = Window.partitionBy("_id").orderBy(col(order_col).desc())
+        df_dedup = df.withColumn("row_num", row_number().over(window_spec)) \
+                     .filter(col("row_num") == 1) \
+                     .drop("row_num")
+    else:
+        df_dedup = df.dropDuplicates(["_id"])
+
     # Đồng bộ hóa schema với ClickHouse
     schema_cols = MONGO_SCHEMAS[topic_name]
     for col_name, col_type in schema_cols:
-        if col_name not in df.columns:
-            df = df.withColumn(col_name, lit(None).cast(col_type))
+        if col_name not in df_dedup.columns:
+            df_dedup = df_dedup.withColumn(col_name, lit(None).cast(col_type))
         else:
-            df = df.withColumn(col_name, col(col_name).cast(col_type))
+            df_dedup = df_dedup.withColumn(col_name, col(col_name).cast(col_type))
             
     # Lựa chọn đúng thứ tự các cột
-    df_cleaned = df.select([col_name for col_name, _ in schema_cols])
+    df_cleaned = df_dedup.select([col_name for col_name, _ in schema_cols])
     
     write_to_delta(df_cleaned, table_name)
 

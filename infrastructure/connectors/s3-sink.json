@@ -18,7 +18,6 @@
     "partition.duration.ms": "86400000",
     "timestamp.extractor": "Wallclock",
     "locale": "en-US",
-    "timezone": "UTC",
     "schema.compatibility": "NONE",
     "aws.access.key.id": "minio_admin",
     "aws.secret.access.key": "minio_password",
