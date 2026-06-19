@@ -16,19 +16,10 @@ def create_spark_session():
         .getOrCreate()
     return spark
 
-def get_input_path(topic, execution_date):
+def get_input_path(source_type, entity_name, execution_date):
     if not execution_date:
-        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.parquet"
-    try:
-        from datetime import datetime
-        dt = datetime.strptime(execution_date, "%Y-%m-%d")
-        year = dt.strftime("%Y")
-        month = dt.strftime("%m")
-        day = dt.strftime("%d")
-        return f"s3a://banking-lakehouse/topics/{topic}/year={year}/month={month}/day={day}/*.parquet"
-    except Exception as e:
-        print(f"Error parsing date {execution_date}: {e}. Falling back to wildcard path.")
-        return f"s3a://banking-lakehouse/topics/{topic}/year=*/month=*/day=*/*.parquet"
+        return f"s3a://banking-lakehouse/batch/{source_type}/{entity_name}/load_date=*/*.parquet"
+    return f"s3a://banking-lakehouse/batch/{source_type}/{entity_name}/load_date={execution_date}/*.parquet"
 
 def write_to_delta(df, table_name):
     # Ghi dữ liệu vào Delta Lake trên MinIO (Silver Layer Delta) sử dụng MERGE INTO
@@ -61,7 +52,7 @@ def write_to_delta(df, table_name):
 
 def transform_postgres_customers(spark, execution_date=None):
     print("Transforming Postgres Customers...")
-    path = get_input_path("postgres.public.customers", execution_date)
+    path = get_input_path("postgres", "customers", execution_date)
     try:
         df = spark.read.parquet(path)
     except Exception as e:
@@ -96,7 +87,7 @@ def transform_postgres_customers(spark, execution_date=None):
 
 def transform_postgres_cards(spark, execution_date=None):
     print("Transforming Postgres Cards...")
-    path = get_input_path("postgres.public.cards", execution_date)
+    path = get_input_path("postgres", "cards", execution_date)
     try:
         df = spark.read.parquet(path)
     except Exception as e:
@@ -124,7 +115,7 @@ def transform_postgres_cards(spark, execution_date=None):
 
 def transform_postgres_transactions(spark, execution_date=None):
     print("Transforming Postgres Transactions...")
-    path = get_input_path("postgres.public.transactions", execution_date)
+    path = get_input_path("postgres", "transactions", execution_date)
     try:
         df = spark.read.parquet(path)
     except Exception as e:
@@ -207,7 +198,7 @@ MONGO_SCHEMAS = {
 
 def transform_mongo_events(spark, topic_name, table_name, execution_date=None):
     print(f"Transforming Mongo Events for {topic_name}...")
-    path = get_input_path(f"mongo.banking_events.{topic_name}", execution_date)
+    path = get_input_path("mongodb", topic_name, execution_date)
     try:
         df = spark.read.parquet(path)
     except Exception as e:
